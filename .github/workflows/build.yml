@@ -1,4 +1,5 @@
-name: AOSP Automagic Build
+name: blckswan black forge v3
+
 on:
   workflow_dispatch:
 
@@ -6,39 +7,88 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    permissions:
+      contents: write
+
+    env:
+      AOSP_BRANCH: android-14.0.0_r1
+      LUNCH_TARGET: aosp_arm64-eng
 
     steps:
-      - name: Setup deps
+      - name: Install deps
         run: |
           sudo apt update
-          sudo apt install -y repo git openjdk-17-jdk ccache lz4 zip unzip
+          sudo apt install -y repo git openjdk-17-jdk ccache zip unzip rsync lz4 bc curl
 
-      - name: Enable ccache turbo
+      - name: Setup ccache
         run: |
           echo "USE_CCACHE=1" >> $GITHUB_ENV
           echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
-          echo "CCACHE_MAXSIZE=10G" >> $GITHUB_ENV
+          echo "CCACHE_MAXSIZE=20G" >> $GITHUB_ENV
 
-      - name: Sync (shallow speedrun)
+      - name: Cache restore
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: forge-${{ runner.os }}-${{ env.AOSP_BRANCH }}-${{ env.LUNCH_TARGET }}
+          restore-keys: |
+            forge-${{ runner.os }}-${{ env.AOSP_BRANCH }}-
+
+      - name: Sync AOSP (retry logic)
         run: |
-          mkdir aosp && cd aosp
-          repo init -u https://android.googlesource.com/platform/manifest -b android-14.0.0_r1 --depth=1
-          repo sync -c -j$(nproc) --no-tags --no-clone-bundle
+          mkdir -p aosp
+          cd aosp
+          repo init -u https://android.googlesource.com/platform/manifest -b $AOSP_BRANCH --depth=1
+          for i in 1 2 3; do
+            repo sync -c -j$(nproc) --no-tags --no-clone-bundle && break || sleep 15
+          done
 
-      - name: Build (all cores go brr)
+      - name: Build (max cores)
+        shell: bash
         run: |
           cd aosp
           source build/envsetup.sh
-          lunch aosp_arm64-eng
+          lunch $LUNCH_TARGET
           make -j$(nproc)
 
-      - name: Package
+      - name: Split + collect artifacts
+        shell: bash
         run: |
-          cd aosp/out/target/product/* || true
-          zip -r build.zip . || true
+          mkdir -p release/system release/vendor release/boot
 
-      - name: Upload artifact
+          PRODUCT_DIR=$(find aosp/out/target/product -mindepth 1 -maxdepth 1 -type d | head -n 1)
+          echo "[*] PRODUCT_DIR=$PRODUCT_DIR"
+
+          cp $PRODUCT_DIR/system.img release/system/ 2>/dev/null || true
+          cp $PRODUCT_DIR/vendor.img release/vendor/ 2>/dev/null || true
+          cp $PRODUCT_DIR/boot.img release/boot/ 2>/dev/null || true
+          cp $PRODUCT_DIR/*.zip release/ 2>/dev/null || true
+
+          echo "branch=$AOSP_BRANCH" > release/BUILD_INFO.txt
+          echo "target=$LUNCH_TARGET" >> release/BUILD_INFO.txt
+          echo "built_at=$(date -u +%FT%TZ)" >> release/BUILD_INFO.txt
+
+          cd release
+          zip -9 -r system.zip system || true
+          zip -9 -r vendor.zip vendor || true
+          zip -9 -r boot.zip boot || true
+          zip -9 -r full-build.zip .
+
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: aosp-build
-          path: aosp/out/target/product/**
+          name: blckswan-forge
+          path: release/
+
+      - name: Release (multi-file)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: forge-${{ github.run_number }}
+          name: blckswan forge #${{ github.run_number }}
+          files: |
+            release/system.zip
+            release/vendor.zip
+            release/boot.zip
+            release/full-build.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
