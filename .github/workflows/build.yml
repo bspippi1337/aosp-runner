@@ -1,4 +1,4 @@
-name: AOSP Automagic Build
+name: AOSP Release Forge
 on:
   workflow_dispatch:
 
@@ -13,19 +13,19 @@ jobs:
           sudo apt update
           sudo apt install -y repo git openjdk-17-jdk ccache lz4 zip unzip
 
-      - name: Enable ccache turbo
+      - name: Enable ccache
         run: |
           echo "USE_CCACHE=1" >> $GITHUB_ENV
           echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
           echo "CCACHE_MAXSIZE=10G" >> $GITHUB_ENV
 
-      - name: Sync (shallow speedrun)
+      - name: Sync (fast mode)
         run: |
           mkdir aosp && cd aosp
           repo init -u https://android.googlesource.com/platform/manifest -b android-14.0.0_r1 --depth=1
           repo sync -c -j$(nproc) --no-tags --no-clone-bundle
 
-      - name: Build (all cores go brr)
+      - name: Build
         run: |
           cd aosp
           source build/envsetup.sh
@@ -35,10 +35,14 @@ jobs:
       - name: Package
         run: |
           cd aosp/out/target/product/* || true
-          zip -r build.zip . || true
+          zip -r aosp-build.zip . || true
+          echo "BUILD_PATH=$(pwd)/aosp-build.zip" >> $GITHUB_ENV
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: aosp-build
-          path: aosp/out/target/product/**
+          tag_name: aosp-$(date +%s)
+          name: AOSP Build $(date)
+          files: ${{ env.BUILD_PATH }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
