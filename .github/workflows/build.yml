@@ -1,4 +1,4 @@
-name: blckswan black forge v3
+name: Moto G15 Power GSI Forge
 
 on:
   workflow_dispatch:
@@ -12,83 +12,46 @@ jobs:
 
     env:
       AOSP_BRANCH: android-14.0.0_r1
-      LUNCH_TARGET: aosp_arm64-eng
+      TARGET: aosp_arm64_ab-userdebug
 
     steps:
-      - name: Install deps
+      - name: Setup
         run: |
           sudo apt update
-          sudo apt install -y repo git openjdk-17-jdk ccache zip unzip rsync lz4 bc curl
+          sudo apt install -y repo git openjdk-17-jdk ccache zip unzip lz4
 
-      - name: Setup ccache
+      - name: Enable ccache
         run: |
           echo "USE_CCACHE=1" >> $GITHUB_ENV
           echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
           echo "CCACHE_MAXSIZE=20G" >> $GITHUB_ENV
 
-      - name: Cache restore
-        uses: actions/cache@v4
-        with:
-          path: ~/.ccache
-          key: forge-${{ runner.os }}-${{ env.AOSP_BRANCH }}-${{ env.LUNCH_TARGET }}
-          restore-keys: |
-            forge-${{ runner.os }}-${{ env.AOSP_BRANCH }}-
-
-      - name: Sync AOSP (retry logic)
+      - name: Sync AOSP
         run: |
-          mkdir -p aosp
-          cd aosp
+          mkdir aosp && cd aosp
           repo init -u https://android.googlesource.com/platform/manifest -b $AOSP_BRANCH --depth=1
-          for i in 1 2 3; do
-            repo sync -c -j$(nproc) --no-tags --no-clone-bundle && break || sleep 15
-          done
+          repo sync -c -j$(nproc)
 
-      - name: Build (max cores)
-        shell: bash
+      - name: Build GSI
         run: |
           cd aosp
           source build/envsetup.sh
-          lunch $LUNCH_TARGET
-          make -j$(nproc)
+          lunch $TARGET
+          make -j$(nproc) systemimage
 
-      - name: Split + collect artifacts
-        shell: bash
+      - name: Package
         run: |
-          mkdir -p release/system release/vendor release/boot
-
-          PRODUCT_DIR=$(find aosp/out/target/product -mindepth 1 -maxdepth 1 -type d | head -n 1)
-          echo "[*] PRODUCT_DIR=$PRODUCT_DIR"
-
-          cp $PRODUCT_DIR/system.img release/system/ 2>/dev/null || true
-          cp $PRODUCT_DIR/vendor.img release/vendor/ 2>/dev/null || true
-          cp $PRODUCT_DIR/boot.img release/boot/ 2>/dev/null || true
-          cp $PRODUCT_DIR/*.zip release/ 2>/dev/null || true
-
-          echo "branch=$AOSP_BRANCH" > release/BUILD_INFO.txt
-          echo "target=$LUNCH_TARGET" >> release/BUILD_INFO.txt
-          echo "built_at=$(date -u +%FT%TZ)" >> release/BUILD_INFO.txt
+          mkdir release
+          find aosp/out/target/product -name "system.img" -exec cp {} release/ \;
 
           cd release
-          zip -9 -r system.zip system || true
-          zip -9 -r vendor.zip vendor || true
-          zip -9 -r boot.zip boot || true
-          zip -9 -r full-build.zip .
+          zip -9 gsi-moto-g15.zip system.img
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: blckswan-forge
-          path: release/
-
-      - name: Release (multi-file)
+      - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: forge-${{ github.run_number }}
-          name: blckswan forge #${{ github.run_number }}
-          files: |
-            release/system.zip
-            release/vendor.zip
-            release/boot.zip
-            release/full-build.zip
+          tag_name: moto-g15-${{ github.run_number }}
+          name: Moto G15 GSI Build
+          files: release/gsi-moto-g15.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
