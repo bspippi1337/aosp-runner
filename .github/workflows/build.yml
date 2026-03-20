@@ -1,4 +1,4 @@
-name: AOSP Release Forge
+name: AOSP + NetHunter Hybrid Forge
 on:
   workflow_dispatch:
 
@@ -11,7 +11,7 @@ jobs:
       - name: Setup deps
         run: |
           sudo apt update
-          sudo apt install -y repo git openjdk-17-jdk ccache lz4 zip unzip
+          sudo apt install -y repo git openjdk-17-jdk ccache wget zip unzip
 
       - name: Enable ccache
         run: |
@@ -19,30 +19,38 @@ jobs:
           echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
           echo "CCACHE_MAXSIZE=10G" >> $GITHUB_ENV
 
-      - name: Sync (fast mode)
+      - name: Sync AOSP
         run: |
           mkdir aosp && cd aosp
           repo init -u https://android.googlesource.com/platform/manifest -b android-14.0.0_r1 --depth=1
-          repo sync -c -j$(nproc) --no-tags --no-clone-bundle
+          repo sync -c -j$(nproc)
 
-      - name: Build
+      - name: Build ROM
         run: |
           cd aosp
           source build/envsetup.sh
           lunch aosp_arm64-eng
           make -j$(nproc)
 
-      - name: Package
+      - name: Fetch NetHunter (rootless)
         run: |
-          cd aosp/out/target/product/* || true
-          zip -r aosp-build.zip . || true
-          echo "BUILD_PATH=$(pwd)/aosp-build.zip" >> $GITHUB_ENV
+          mkdir nethunter && cd nethunter
+          wget -q https://offs.ec/2MceZWr -O install-nethunter.sh || true
+          chmod +x install-nethunter.sh
 
-      - name: Create Release
+      - name: Package combo
+        run: |
+          mkdir release
+          cp -r aosp/out/target/product/* release/ || true
+          cp -r nethunter release/nethunter || true
+          cd release
+          zip -r aosp-nethunter-bundle.zip .
+
+      - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: aosp-$(date +%s)
-          name: AOSP Build $(date)
-          files: ${{ env.BUILD_PATH }}
+          tag_name: aosp-nh-$(date +%s)
+          name: AOSP + NetHunter Bundle
+          files: release/aosp-nethunter-bundle.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
