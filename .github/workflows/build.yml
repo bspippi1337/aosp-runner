@@ -1,11 +1,11 @@
-name: blckswan speedrun forge v2
+name: blckswan speedrun forge v3
 
 on:
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 180
     permissions:
       contents: write
@@ -15,86 +15,37 @@ jobs:
       TARGET: lineage_arm64-userdebug
 
     steps:
-      - name: Install deps
+
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
         run: |
-          sudo apt update
-          sudo apt install -y \
-            repo git openjdk-17-jdk \
-            ccache zip unzip lz4 bc \
-            build-essential flex bison gperf \
-            libxml2-utils zlib1g-dev \
-            libncurses5-dev libncurses5 \
-            libtinfo5 python3
+          sudo apt-get update
+
+          sudo apt-get install -y \
+            git repo \
+            openjdk-17-jdk \
+            ccache \
+            zip unzip \
+            lz4 bc \
+            build-essential \
+            flex bison gperf \
+            libxml2-utils \
+            zlib1g-dev \
+            libncurses5-dev \
+            libncurses5 \
+            libtinfo5 \
+            python3
 
       - name: Setup ccache
         run: |
           echo "USE_CCACHE=1" >> $GITHUB_ENV
           echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
-          echo "CCACHE_MAXSIZE=20G" >> $GITHUB_ENV
-          echo "CCACHE_EXEC=/usr/bin/ccache" >> $GITHUB_ENV
+          echo "CCACHE_MAXSIZE=15G" >> $GITHUB_ENV
 
       - name: Restore cache
         uses: actions/cache@v4
         with:
           path: ~/.ccache
-          key: speedrun-${{ runner.os }}-${{ env.BRANCH }}
-          restore-keys: |
-            speedrun-${{ runner.os }}-
-
-      - name: Init repo
-        run: |
-          mkdir aosp
-          cd aosp
-          repo init \
-            -u https://github.com/LineageOS/android.git \
-            -b $BRANCH \
-            --depth=1
-
-      - name: Sync source (turbo mode)
-        run: |
-          cd aosp
-          repo sync \
-            -c \
-            -j$(nproc) \
-            --optimized-fetch \
-            --no-tags \
-            --no-clone-bundle
-
-      - name: Enable ccache
-        run: |
-          cd aosp
-          prebuilts/misc/linux-x86/ccache/ccache -M 20G || true
-
-      - name: Preflight sanity check
-        run: |
-          cd aosp
-          test -f build/envsetup.sh || exit 1
-
-      - name: Build systemimage (fast validation pass)
-        run: |
-          cd aosp
-          source build/envsetup.sh
-          lunch $TARGET
-          make systemimage -j$(nproc)
-
-      - name: Full build if systemimage OK
-        run: |
-          cd aosp
-          make -j$(nproc)
-
-      - name: Collect artifacts
-        run: |
-          mkdir release
-          find aosp/out/target/product -name "*.img" -exec cp {} release/ \; || true
-          find aosp/out/target/product -name "*.zip" -exec cp {} release/ \; || true
-          cd release
-          zip -9 speedrun-build.zip . || true
-
-      - name: Publish release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: speedrun-${{ github.run_number }}
-          name: blckswan speedrun build #${{ github.run_number }}
-          files: release/speedrun-build.zip
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          key: aosp-${{ runner.os }}-${{ env.BRANCH
