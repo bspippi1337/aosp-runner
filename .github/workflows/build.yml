@@ -1,4 +1,4 @@
-name: AOSP + NetHunter Hybrid Forge
+name: AOSP Automagic Build
 on:
   workflow_dispatch:
 
@@ -11,46 +11,34 @@ jobs:
       - name: Setup deps
         run: |
           sudo apt update
-          sudo apt install -y repo git openjdk-17-jdk ccache wget zip unzip
+          sudo apt install -y repo git openjdk-17-jdk ccache lz4 zip unzip
 
-      - name: Enable ccache
+      - name: Enable ccache turbo
         run: |
           echo "USE_CCACHE=1" >> $GITHUB_ENV
           echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
           echo "CCACHE_MAXSIZE=10G" >> $GITHUB_ENV
 
-      - name: Sync AOSP
+      - name: Sync (shallow speedrun)
         run: |
           mkdir aosp && cd aosp
           repo init -u https://android.googlesource.com/platform/manifest -b android-14.0.0_r1 --depth=1
-          repo sync -c -j$(nproc)
+          repo sync -c -j$(nproc) --no-tags --no-clone-bundle
 
-      - name: Build ROM
+      - name: Build (all cores go brr)
         run: |
           cd aosp
           source build/envsetup.sh
           lunch aosp_arm64-eng
           make -j$(nproc)
 
-      - name: Fetch NetHunter (rootless)
+      - name: Package
         run: |
-          mkdir nethunter && cd nethunter
-          wget -q https://offs.ec/2MceZWr -O install-nethunter.sh || true
-          chmod +x install-nethunter.sh
+          cd aosp/out/target/product/* || true
+          zip -r build.zip . || true
 
-      - name: Package combo
-        run: |
-          mkdir release
-          cp -r aosp/out/target/product/* release/ || true
-          cp -r nethunter release/nethunter || true
-          cd release
-          zip -r aosp-nethunter-bundle.zip .
-
-      - name: Release
-        uses: softprops/action-gh-release@v2
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: aosp-nh-$(date +%s)
-          name: AOSP + NetHunter Bundle
-          files: release/aosp-nethunter-bundle.zip
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: aosp-build
+          path: aosp/out/target/product/**
