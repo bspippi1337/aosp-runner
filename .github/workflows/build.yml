@@ -1,4 +1,4 @@
-name: blckswan speedrun forge
+name: blckswan speedrun forge v2
 
 on:
   workflow_dispatch:
@@ -11,70 +11,90 @@ jobs:
       contents: write
 
     env:
-      DEVICE: lamu
-      TARGET: lineage_lamu-userdebug
       BRANCH: lineage-21.0
+      TARGET: lineage_arm64-userdebug
 
     steps:
       - name: Install deps
         run: |
           sudo apt update
-          sudo apt install -y repo git openjdk-17-jdk ccache zip unzip lz4 bc
+          sudo apt install -y \
+            repo git openjdk-17-jdk \
+            ccache zip unzip lz4 bc \
+            build-essential flex bison gperf \
+            libxml2-utils zlib1g-dev \
+            libncurses5-dev libncurses5 \
+            libtinfo5 python3
 
-      - name: Setup cache
+      - name: Setup ccache
         run: |
           echo "USE_CCACHE=1" >> $GITHUB_ENV
           echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
-          echo "CCACHE_MAXSIZE=25G" >> $GITHUB_ENV
+          echo "CCACHE_MAXSIZE=20G" >> $GITHUB_ENV
           echo "CCACHE_EXEC=/usr/bin/ccache" >> $GITHUB_ENV
 
       - name: Restore cache
         uses: actions/cache@v4
         with:
           path: ~/.ccache
-          key: speedrun-${{ runner.os }}-${{ env.BRANCH }}-${{ env.DEVICE }}
+          key: speedrun-${{ runner.os }}-${{ env.BRANCH }}
           restore-keys: |
-            speedrun-${{ runner.os }}-${{ env.BRANCH }}-
+            speedrun-${{ runner.os }}-
 
-      - name: Sync (turbo)
+      - name: Init repo
         run: |
-          mkdir -p aosp/.repo/local_manifests
-          cp local_manifests/lamu.xml aosp/.repo/local_manifests/
-
+          mkdir aosp
           cd aosp
-          repo init -u https://github.com/LineageOS/android.git -b $BRANCH --depth=1
-          repo sync -c -j$(nproc) --optimized-fetch --no-tags --no-clone-bundle
+          repo init \
+            -u https://github.com/LineageOS/android.git \
+            -b $BRANCH \
+            --depth=1
 
-      - name: ⚡ Preflight check (fail fast)
+      - name: Sync source (turbo mode)
         run: |
           cd aosp
-          test -d device/motorola/lamu || (echo "❌ Missing device tree" && exit 1)
-          test -d vendor/motorola || (echo "❌ Missing vendor" && exit 1)
+          repo sync \
+            -c \
+            -j$(nproc) \
+            --optimized-fetch \
+            --no-tags \
+            --no-clone-bundle
 
-      - name: ⚡ Build SYSTEM ONLY (speed test)
+      - name: Enable ccache
+        run: |
+          cd aosp
+          prebuilts/misc/linux-x86/ccache/ccache -M 20G || true
+
+      - name: Preflight sanity check
+        run: |
+          cd aosp
+          test -f build/envsetup.sh || exit 1
+
+      - name: Build systemimage (fast validation pass)
         run: |
           cd aosp
           source build/envsetup.sh
           lunch $TARGET
           make systemimage -j$(nproc)
 
-      - name: ⚡ If system OK → full build
+      - name: Full build if systemimage OK
         run: |
           cd aosp
           make -j$(nproc)
 
-      - name: Package
+      - name: Collect artifacts
         run: |
           mkdir release
+          find aosp/out/target/product -name "*.img" -exec cp {} release/ \; || true
           find aosp/out/target/product -name "*.zip" -exec cp {} release/ \; || true
           cd release
           zip -9 speedrun-build.zip . || true
 
-      - name: Release
+      - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: speedrun-${{ github.run_number }}
-          name: speedrun build #${{ github.run_number }}
+          name: blckswan speedrun build #${{ github.run_number }}
           files: release/speedrun-build.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
