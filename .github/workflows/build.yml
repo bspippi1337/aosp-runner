@@ -1,7 +1,20 @@
-name: Moto G15 Power GSI Forge
+name: full device forge
 
 on:
   workflow_dispatch:
+    inputs:
+      device:
+        description: "Device codename, e.g. lamu/lamul/lamulg"
+        required: true
+        default: "lamu"
+      build_target:
+        description: "Build target"
+        required: true
+        default: "userdebug"
+      aosp_branch:
+        description: "AOSP branch"
+        required: true
+        default: "android-15.0.0_r1"
 
 jobs:
   build:
@@ -11,47 +24,98 @@ jobs:
       contents: write
 
     env:
-      AOSP_BRANCH: android-14.0.0_r1
-      TARGET: aosp_arm64_ab-userdebug
+      DEVICE: ${{ github.event.inputs.device }}
+      BUILD_TARGET: ${{ github.event.inputs.build_target }}
+      AOSP_BRANCH: ${{ github.event.inputs.aosp_branch }}
 
     steps:
-      - name: Setup
+      - name: Install deps
         run: |
           sudo apt update
-          sudo apt install -y repo git openjdk-17-jdk ccache zip unzip lz4
+          sudo apt install -y repo git git-lfs openjdk-17-jdk ccache zip unzip rsync lz4 bc bison flex gperf libxml2-utils zlib1g-dev libncurses5-dev libncursesw5-dev libssl-dev pngcrush schedtool xsltproc python3
 
-      - name: Enable ccache
+      - name: Setup ccache
         run: |
-          echo "USE_CCACHE=1" >> $GITHUB_ENV
-          echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
-          echo "CCACHE_MAXSIZE=20G" >> $GITHUB_ENV
+          echo "USE_CCACHE=1" >> "$GITHUB_ENV"
+          echo "CCACHE_DIR=$HOME/.ccache" >> "$GITHUB_ENV"
+          echo "CCACHE_MAXSIZE=20G" >> "$GITHUB_ENV"
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: forge-${{ runner.os }}-${{ github.event.inputs.aosp_branch }}-${{ github.event.inputs.device }}-${{ github.run_attempt }}
+          restore-keys: |
+            forge-${{ runner.os }}-${{ github.event.inputs.aosp_branch }}-${{ github.event.inputs.device }}-
+            forge-${{ runner.os }}-${{ github.event.inputs.aosp_branch }}-
 
       - name: Sync AOSP
         run: |
-          mkdir aosp && cd aosp
-          repo init -u https://android.googlesource.com/platform/manifest -b $AOSP_BRANCH --depth=1
-          repo sync -c -j$(nproc)
+          mkdir -p aosp/.repo/local_manifests
+          cd aosp
+          repo init -u https://android.googlesource.com/platform/manifest -b "$AOSP_BRANCH" --depth=1
+          if [ -f "$GITHUB_WORKSPACE/local_manifests/${DEVICE}.xml" ]; then
+            cp "$GITHUB_WORKSPACE/local_manifests/${DEVICE}.xml" .repo/local_manifests/roomservice.xml
+          fi
+          for i in 1 2 3; do
+            repo sync -c -j"$(nproc)" --no-tags --no-clone-bundle && break || sleep 20
+          done
 
-      - name: Build GSI
+      - name: Sanity check required trees
+        shell: bash
+        run: |
+          cd aosp
+          test -d "device/motorola/${DEVICE}" || { echo "Missing device tree: device/motorola/${DEVICE}"; exit 1; }
+          test -d "vendor/motorola/${DEVICE}" || { echo "Missing vendor tree: vendor/motorola/${DEVICE}"; exit 1; }
+          if [ ! -d "kernel/motorola/${DEVICE}" ] && [ ! -d "kernel/motorola/mt*" ] && [ ! -d "device/motorola/${DEVICE}-kernel" ]; then
+            echo "Kernel tree not found in expected paths"
+            exit 1
+          fi
+
+      - name: Import proprietary blobs if present
+        shell: bash
+        run: |
+          cd aosp
+          if [ -d "$GITHUB_WORKSPACE/proprietary/${DEVICE}" ]; then
+            mkdir -p "vendor/motorola/${DEVICE}/proprietary"
+            rsync -av "$GITHUB_WORKSPACE/proprietary/${DEVICE}/" "vendor/motorola/${DEVICE}/proprietary/"
+          fi
+
+      - name: Build ROM
+        shell: bash
         run: |
           cd aosp
           source build/envsetup.sh
-          lunch $TARGET
-          make -j$(nproc) systemimage
+          lunch "aosp_${DEVICE}-${BUILD_TARGET}" || lunch "${DEVICE}-${BUILD_TARGET}" || { echo "No valid lunch target found"; exit 1; }
+          mka bacon -j"$(nproc)" || make -j"$(nproc)"
 
-      - name: Package
+      - name: Collect artifacts
+        shell: bash
         run: |
-          mkdir release
-          find aosp/out/target/product -name "system.img" -exec cp {} release/ \;
-
+          mkdir -p release
+          PRODUCT_DIR="$(find aosp/out/target/product -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+          test -n "$PRODUCT_DIR"
+          find "$PRODUCT_DIR" -maxdepth 1 -type f \( -name "*.img" -o -name "*.zip" -o -name "*.bin" -o -name "*.txt" -o -name "*.json" \) -exec cp {} release/ \;
+          printf '%s\n' \
+            "device=$DEVICE" \
+            "build_target=$BUILD_TARGET" \
+            "branch=$AOSP_BRANCH" \
+            "built_at=$(date -u +%FT%TZ)" \
+            > release/BUILD_INFO.txt
           cd release
-          zip -9 gsi-moto-g15.zip system.img
+          zip -9 -r "${DEVICE}-forge.zip" .
 
-      - name: Release
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event.inputs.device }}-forge
+          path: release/**
+
+      - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: moto-g15-${{ github.run_number }}
-          name: Moto G15 GSI Build
-          files: release/gsi-moto-g15.zip
+          tag_name: ${{ github.event.inputs.device }}-${{ github.run_number }}
+          name: ${{ github.event.inputs.device }} forge #${{ github.run_number }}
+          files: release/*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
